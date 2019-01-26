@@ -4,13 +4,17 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import sun.reflect.generics.reflectiveObjects.NotImplementedException;
 
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.ObjectOutputStream;
+import java.io.*;
 import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.*;
+import java.util.Collection;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
+import java.util.function.Predicate;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -38,16 +42,6 @@ public class PartiallySerializedSet implements Set<String> {
         this.serializedSetsCount = 0L;
     }
 
-    public Collection<String> filterByRegex(String regex) {
-        Pattern pattern = Pattern.compile(regex);
-        Collection<String> result = currentSet.stream().filter(fileName -> pattern.matcher(fileName).find())
-                .collect(Collectors.toSet());
-        if(serializedSetsCount > 0) {
-            // TODO: complete
-        }
-        return result;
-    }
-
     @Override
     public boolean add(String s) {
         synchronized (lock) {
@@ -69,13 +63,51 @@ public class PartiallySerializedSet implements Set<String> {
         return true;
     }
 
+
+    public Collection<String> filterByRegex(String regex) {
+        Collection<String> result;
+        Pattern pattern = Pattern.compile(regex);
+        Predicate<String> filter = fileName -> pattern.matcher(fileName).find();
+        synchronized (lock) {
+            result = currentSet.stream().filter(filter)
+                    .collect(Collectors.toSet());
+            if (serializedSetsCount > 0) {
+                // TODO: serialize currentSet
+                forTheSerilizedSets(set -> set.stream().filter(filter).forEach(result::add), o -> true);
+                // TODO: restore currentSet
+            }
+        }
+        return result;
+    }
+
     @Override
     public boolean remove(Object o) {
+        AtomicBoolean removed = new AtomicBoolean();
         synchronized (lock) {
             size = decrement();
-            // TODO: complete
+            if(!currentSet.remove(o) && serializedSetsCount > 0) {
+                // TODO: serialize current
+                forTheSerilizedSets(set -> removed.compareAndSet(false, set.remove(o)),
+                        index -> !removed.get());
+                // TODO : restore current
+            } else {
+                removed.set(true);
+            }
         }
-        return true;
+        return removed.get();
+    }
+
+    private void forTheSerilizedSets(Consumer<Set<String>> serilizedSetConsumer, Predicate<Long> customBreakCondition) {
+        Predicate<Long> indexCondition = index -> index < serializedSetsCount;
+        for (long i = 0; indexCondition.or(customBreakCondition).test(i); ++i) {
+            try {
+                ObjectInputStream stream = new ObjectInputStream(
+                        new FileInputStream(indexFilePath.resolve(i + "").toFile()));
+                serilizedSetConsumer.accept((Set<String>) stream.readObject());
+            } catch (IOException | ClassNotFoundException e) {
+                LOGGER.error("Failed to read serialized set {}", i, e);
+            }
+        }
     }
 
     @Override
