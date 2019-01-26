@@ -20,7 +20,6 @@ import java.nio.file.Path;
 import java.util.Collection;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.stream.Collectors;
 
 /**
  * Created by macbookproritena on 1/19/19.
@@ -113,9 +112,7 @@ public class UploadRestController {
     // TODO add limit and pagination
     @GetMapping("/enum")
     public ResponseEntity<Collection<String>> enumerateFiltered(@RequestParam("filter") String filter) {
-        Collection<String> paths = storageService.filterByRegex(filter).stream()
-                .map(Path::toString)
-                .collect(Collectors.toList());
+        Collection<String> paths = storageService.filterByRegex(filter);
         return paths.isEmpty()
                 ? ResponseEntity.noContent().build()
                 : ResponseEntity.ok(paths);
