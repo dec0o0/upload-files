@@ -2,8 +2,8 @@ package com.upload.service.impl;
 
 import com.upload.service.api.IStorageService;
 import com.upload.service.api.StorageException;
-import com.upload.service.impl.visitors.CountVisitor;
-import com.upload.service.impl.visitors.RegexVisitor;
+import com.upload.service.impl.visitors.PartiallySerializedSet;
+import com.upload.service.impl.visitors.IndexationVisitor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -18,7 +18,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.Optional;
 
 import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
@@ -29,33 +28,33 @@ import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
 @Service
 public class StorageServiceImpl implements IStorageService {
     private static final Logger LOGGER = LoggerFactory.getLogger(StorageServiceImpl.class);
-    private final AtomicBigDecimal count;
+    private final PartiallySerializedSet files;
     private final Path filesRoot;
 
     @Autowired
     public StorageServiceImpl(StorageConfig configuration) throws IOException {
         this.filesRoot = Paths.get(configuration.getPath());
-        this.count = new AtomicBigDecimal(initForPath(filesRoot));
+        this.files = initFor(filesRoot, Paths.get("/indexes/"), configuration.getMemoryThreshold());
     }
 
-    private static BigDecimal initForPath(Path root) throws IOException {
+    private static PartiallySerializedSet initFor(Path root, Path indexRoot, long threshHold) throws IOException {
         if(root == null || StringUtils.isEmpty(root.toString())) {
             throw new IllegalArgumentException("Invalid root path");
         }
-        CountVisitor visitor = new CountVisitor();
+        Files.deleteIfExists(indexRoot);
+        Files.createDirectories(indexRoot);
+        IndexationVisitor visitor = new IndexationVisitor(new PartiallySerializedSet(indexRoot, threshHold));
         if(Files.exists(root)) {
             Files.walkFileTree(root, visitor);
         } else {
             Files.createDirectories(root);
         }
-        return visitor.getCount();
+        return visitor.getResults();
     }
 
     @Override
     public BigDecimal getFilesCount() {
-        return Optional.ofNullable(count)
-                .map(AtomicBigDecimal::get)
-                .orElseGet(() -> new BigDecimal(0));
+        return files.bigSize();
     }
 
     @Override
@@ -65,7 +64,7 @@ public class StorageServiceImpl implements IStorageService {
         }
         try {
             Files.copy(fileStream, this.filesRoot.resolve(fileName), REPLACE_EXISTING);
-            count.increment();
+            files.add(fileName);
         } catch (IOException e) {
             throw new StorageException("File write failed", e);
         }
@@ -85,7 +84,7 @@ public class StorageServiceImpl implements IStorageService {
             Optional<Path> existingFile = this.read(filename);
             Files.copy(updateStream, this.filesRoot.resolve(filename), REPLACE_EXISTING);
             if(!existingFile.isPresent()) {
-                count.increment();
+                files.add(filename);
             }
         } catch (IOException e) {
             throw new StorageException("File write failed", e);
@@ -97,7 +96,7 @@ public class StorageServiceImpl implements IStorageService {
         Optional<Path> filePath = this.read(fileName);
         Optional<Boolean> resultOp = filePath.map(path -> {
             try {
-                count.decrement();
+                files.remove(fileName);
                 return Files.deleteIfExists(path);
             } catch (IOException e) {
                 LOGGER.error("Failed to delete {}", path);
@@ -110,7 +109,7 @@ public class StorageServiceImpl implements IStorageService {
     @Override
     public void deleteAll() {
         try {
-            count.reset();
+            files.clear();
             FileSystemUtils.deleteRecursively(filesRoot);
         } catch (IOException e) {
             LOGGER.error("Delete all failed");
@@ -118,15 +117,7 @@ public class StorageServiceImpl implements IStorageService {
     }
 
     @Override
-    public Collection<Path> filterByRegex(String regex) {
-        Collection<Path> result = Collections.emptyList();
-        try {
-            RegexVisitor visitor = new RegexVisitor(regex);
-            Files.walkFileTree(filesRoot, visitor);
-            result = visitor.getMatched();
-        } catch (IOException e) {
-            LOGGER.error("Walk file failed", e);
-        }
-        return result;
+    public Collection<String> filterByRegex(String regex) {
+        return files.filterByRegex(regex);
     }
 }

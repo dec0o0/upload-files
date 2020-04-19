@@ -23,5 +23,5 @@ public interface IStorageService {
 
     void deleteAll();
 
-    Collection<Path> filterByRegex(String regex);
+    Collection<String> filterByRegex(String regex);
 }
